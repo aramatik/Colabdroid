@@ -1,81 +1,64 @@
-# Google Colab CLI — Northflank Backend
+# Google Colab CLI — Backend & Web Terminal
+Полнофункциональный бэкенд (Node.js + Python 3.12 + OpenSSH) и веб-интерфейс на базе xterm.js для управления средами выполнения Google Colab через [google-colab-cli](https://github.com/googlecolab/google-colab-cli). Оптимизирован для работы в десктопных и мобильных браузерах (включая Android WebView / APK).
+---
+## 🚀 Основные возможности
+- **Полноценный интерактивный PTY-терминал (`colab ssh`)**:
+  - Настоящая bash-сессия с сохранением переменных окружения, истории команд и текущей директории (`cd`).
+  - Работает через `node-pty` и WebSocket (`/pty`).
+  - Поддержка интерактивных консольных программ (`htop`, `vim`, `nano`, `tmux` и т.д.).
+  - Автоматическая генерация и ротация Ed25519 SSH-ключей без необходимости ручной настройки удалённого инстанса.
+- **Резервный режим Line-Exec**:
+  - Выполнение команд построчно через `colab exec` (WebSocket `/terminal`).
+- **Интерактивный перехват авторизации Google (OAuth)**:
+  - Если команда Colab CLI требует подтверждения (`Enter the authorization code:`), сервер парсит ссылку и удерживает команду.
+  - В веб-интерфейсе появляется плавающий баннер с кнопками `[COPY_LINK]`, `[OPEN_LINK]` и полем для быстрой вставки полученного кода без сброса процесса.
+- **Двухэтапное монтирование Google Drive**:
+  - Решение проблемы коротких таймаутов на мобильных устройствах (патч таймаута до 10 минут).
+  - Пошаговый сценарий: запуск задачи → вход в аккаунт → подтверждение монтирования (`CONFIRM_MOUNT`).
+- **Управление Jupyter Notebooks (`.ipynb`)**:
+  - Сканирование блокнотов на смонтированном Google Drive (`/content/drive/MyDrive/...`).
+  - Запуск в фоновом режиме через `nbconvert` (или ячеечный фоллбэк) с выводом логов.
+  - Генерация ссылок для открытия сессии и файлов напрямую в оригинальном веб-интерфейсе Google Colab.
+- **Файловый менеджер VM**:
+  - Навигация по файловой системе инстанса Colab (`/content`).
+  - Скачивание и загрузка файлов (через `multipart/form-data`).
+- **Мониторинг ресурсов**:
+  - Снятие параметров GPU (`nvidia-smi`: память, температура, утилизация ядра/памяти).
+  - Мониторинг CPU (`lscpu`), ОЗУ (`free -h`) и диска (`df -h`).
+- **Мобильный режим `[SELECT_TEXT]`**:
+  - Панель чистого текста с возможностью выделения маркерами на смартфонах и кнопкой `[COPY_ALL]`.
+---
+## 🛠 Системные требования
+- **Docker**: базовый образ Debian Bookworm (Python 3.12 + Node.js 20).
+- **Пакеты**: `openssh-client`, `python3-dev`, `make`, `g++` (для сборки `node-pty`).
+- **Постоянный том (Persistent Volume)**: смонтированный в `/data` для сохранения токенов авторизации, истории сессий и SSH-ключей.
+---
+## ⚙️ Переменные окружения (Environment Variables)
 
-Node.js API + Web UI that drives [google-colab-cli](https://github.com/googlecolab/google-colab-cli) for the **Colab Terminal** Android app.
+| Переменная | Обязательна | По умолчанию | Описание |
+| :--- | :--- | :--- | :--- |
+| `API_KEY` | **Да** (в prod) | `""` | Секретный ключ API. Передаётся клиентами в заголовке `x-api-key` или query-параметре `api_key`. |
+| `REQUIRE_API_KEY` | Нет | `1` | `1` — требовать API-ключ, `0` — отключить (только для локальной отладки). |
+| `WEB_TOKEN` | Нет | `""` | Пароль для входа в Web UI через браузер (`https://<host>/?token=WEB_TOKEN`). Устанавливает cookie. |
+| `PORT` | Нет | `8080` | Порт HTTP/WebSocket сервера. |
+| `COLAB_HOME` / `HOME` | **Да** | `/data` | Путь к домашней директории для хранения конфигов и ключей. |
+| `COLAB_AUTH_TOKEN` | Нет | `""` | Стартовый токен (JSON или base64) для автоматической инициализации `token.json`. |
+| `SSH_KEY_PATH` | Нет | `/data/.ssh/id_ed25519` | Путь к приватному SSH-ключу, используемому для `colab ssh`. |
+| `SSH_PRIVATE_KEY` | Нет | `""` | Передача готового приватного ключа через env (raw PEM или base64). |
+| `MAX_PTYS` | Нет | `8` | Максимальное количество одновременно активных PTY-терминалов. |
 
-## Important: terminal mode
-
-This is a **line-exec** terminal, not a persistent SSH/PTY shell:
-
-- each command → one `colab exec` on the Colab VM
-- `cd`, env vars, and shell state **do not** carry across lines like in a real bash session
-- use multi-line `%%bash` blocks or a single compound command when you need shared state
-
-## Requirements
-
-- Docker (Python **3.12** + Node 20 in the image)
-- Northflank (or any Docker host) with a **persistent volume** at `/data`
-- Google account that can use Colab
-- Strong `API_KEY` (required by default)
-
-## Environment
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `API_KEY` | **Yes** (prod) | Shared secret; clients send `x-api-key` |
-| `REQUIRE_API_KEY` | no | Default `1`. Set `0` only for local debug |
-| `PORT` | no | Default `8080` |
-| `COLAB_HOME` / `HOME` | yes on NF | Set to `/data` so tokens survive restarts |
-| `COLAB_AUTH_TOKEN` | no | Bootstrap `token.json` (raw JSON or base64) |
-
-## Northflank deploy
-
-1. Push the `backend/` folder to a Git repo (or build the Dockerfile from this directory).
-2. Create a service: **Dockerfile** build, port **8080** public HTTP (WebSocket supported).
-3. Add volume: mount path **`/data`**.
-4. Env:
-   - `API_KEY=<long-random-secret>`
-   - `REQUIRE_API_KEY=1`
-   - `COLAB_HOME=/data`
-   - `HOME=/data`
-5. Deploy. Open `https://<host>/health` — should show `colabCliOk: true`, `apiKeyRequired: true`.
-
-See `northflank.json` for a sample shape (adjust to the NF UI if the JSON is not imported 1:1).
-
-## Google auth (one-time)
-
-1. Open the service URL → tab **AUTH & CONFIG**.
-2. Save connection: Base URL empty (same origin), API key = your `API_KEY`.
-3. **Generate Google login link** → approve → paste `4/0...` code → Submit.
-4. Or paste full `token.json` content.
-
-Tokens are stored under `$HOME/.config/colab-cli/` (i.e. `/data/.config/colab-cli` when `HOME=/data`).
-
-## API (summary)
-
-All `/api/*` require header `x-api-key: <API_KEY>` when `API_KEY` is set.
-
-- `GET /health` — public health + CLI version
-- `GET /api/auth/status`, `GET /api/auth/login-url`, `POST /api/auth/code`, `POST /api/auth/token`
-- `GET/POST /api/sessions`, `DELETE /api/sessions/:name`
-- `POST /api/exec` — `{ session, code, isBash, timeout }`
-- `GET /api/gpu?session=`, `GET /api/system?session=`, `GET /api/files`
-- `WS /terminal?session=NAME&api_key=KEY` — streaming line-exec
-
-## Local run
-
-```bash
-export REQUIRE_API_KEY=0   # or set API_KEY=dev
-export COLAB_HOME=$PWD/data HOME=$PWD/data
-mkdir -p data
-docker build -t colab-backend .
-docker run --rm -p 8080:8080 -e REQUIRE_API_KEY=0 -e COLAB_HOME=/data -e HOME=/data -v $PWD/data:/data colab-backend
-```
-
-## Android APK
-
-Bundled WebView loads `assets/index.html`. In **AUTH & CONFIG** set:
-
-- Base URL = `https://your-northflank-host`
-- API key = same as server `API_KEY`
-
-Then **Save connection** and **Test /health**.
+---
+## 📦 Развёртывание
+### Вариант 1: Northflank (Рекомендуемый)
+1. Создайте **Combined Service** или **Deployment Service** на базе **Dockerfile**.
+2. В секции **Networking** настройте порт `8080` (HTTP) с поддержкой WebSockets.
+3. В секции **Volumes** подключите постоянный том:
+   - **Mount Path**: `/data`
+   - **Storage Size**: от 1 GB (для конфигов и временных файлов).
+4. Задайте переменные окружения:
+   ```env
+   API_KEY=ваш_сложный_секретный_ключ
+   REQUIRE_API_KEY=1
+   WEB_TOKEN=секрет_для_входа_в_браузере
+   COLAB_HOME=/data
+   HOME=/data
